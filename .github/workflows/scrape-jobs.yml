@@ -1,0 +1,161 @@
+name: Scrape JobTrain IoM Jobs
+
+on:
+  # Run on schedule (daily at 2 AM UTC)
+  schedule:
+    - cron: '0 2 * * *'
+  
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+
+jobs:
+  scrape-jobs:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: 📦 Create scraper script
+        run: |
+          cat > scraper.js << 'EOF'
+          const fs = require('fs');
+          const https = require('https');
+          
+          const BASE_URL = 'https://www.jobtrain.co.uk/iomgovjobs/Home/_JobCard?Skip=';
+          const QUERY_PARAMS = '&what=&Miles=&Salary=&LocationId=&Regions=&DivisionIds=&ClientCategory=&Departments=&SchoolLocationId=&JobLevels=&SchoolSubjectId=&JobTypeIds=&lat=0&long=0&EmploymentType=&postedDate=';
+          const ITEMS_PER_PAGE = 12;
+          
+          function fetchUrl(url) {
+            return new Promise((resolve, reject) => {
+              https.get(url, { timeout: 10000 }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                  try {
+                    resolve(JSON.parse(data));
+                  } catch (e) {
+                    reject(new Error(`JSON parse error: ${e.message}`));
+                  }
+                });
+              }).on('error', reject);
+            });
+          }
+          
+          async function fetchAllJobs() {
+            const allJobs = [];
+            let skipValue = 0;
+            let pageCount = 0;
+            let hasMoreJobs = true;
+          
+            console.log('🚀 Starting to scrape jobs from JobTrain IoM...\n');
+          
+            while (hasMoreJobs) {
+              const url = `${BASE_URL}${skipValue}${QUERY_PARAMS}`;
+              pageCount++;
+          
+              try {
+                console.log(`📄 Fetching page ${pageCount} (Skip=${skipValue})...`);
+                const jobs = await fetchUrl(url);
+          
+                if (!Array.isArray(jobs) || jobs.length === 0) {
+                  console.log(`✅ No more jobs found. Total pages: ${pageCount - 1}`);
+                  hasMoreJobs = false;
+                  break;
+                }
+          
+                console.log(`   ✓ Found ${jobs.length} jobs on this page`);
+                allJobs.push(...jobs);
+          
+                if (jobs.length < ITEMS_PER_PAGE) {
+                  console.log(`✅ Last page reached (${jobs.length} jobs < ${ITEMS_PER_PAGE})`);
+                  hasMoreJobs = false;
+                }
+          
+                skipValue += ITEMS_PER_PAGE;
+          
+                // Respectful delay
+                await new Promise(resolve => setTimeout(resolve, 500));
+          
+              } catch (error) {
+                console.error(`❌ Error fetching page ${pageCount}:`, error.message);
+                break;
+              }
+            }
+          
+            return allJobs;
+          }
+          
+          async function main() {
+            try {
+              const jobs = await fetchAllJobs();
+          
+              const output = {
+                metadata: {
+                  totalJobs: jobs.length,
+                  scrapedAt: new Date().toISOString(),
+                  source: 'https://www.jobtrain.co.uk/iomgovjobs/',
+                  description: 'All job listings from JobTrain Isle of Man Government Jobs'
+                },
+                jobs: jobs
+              };
+          
+              // Create data directory if it doesn't exist
+              if (!fs.existsSync('data')) {
+                fs.mkdirSync('data', { recursive: true });
+              }
+          
+              const outputPath = 'data/all_jobs.json';
+              fs.writeFileSync(outputPath, JSON.stringify(output, null, 2));
+          
+              console.log(`\n✨ Success!`);
+              console.log(`📊 Total jobs scraped: ${jobs.length}`);
+              console.log(`📁 Saved to: ${outputPath}`);
+              
+              // Write summary for GitHub Actions
+              fs.writeFileSync('job-summary.json', JSON.stringify({
+                totalJobs: jobs.length,
+                timestamp: new Date().toISOString()
+              }));
+              
+            } catch (error) {
+              console.error('Fatal error:', error);
+              process.exit(1);
+            }
+          }
+          
+          main();
+          EOF
+        
+      - name: 🎯 Run scraper
+        run: node scraper.js
+        
+      - name: 📊 Display results
+        run: |
+          echo "=== Job Scraping Results ===" 
+          cat job-summary.json
+          
+      - name: 📝 Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action Bot"
+          
+          # Check if there are changes
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add data/all_jobs.json
+            git commit -m "chore: update job listings - $(date +'%Y-%m-%d %H:%M:%S UTC')" || true
+            git push || echo "Nothing to push"
+          fi
+          
+      - name: ✅ Workflow complete
+        run: echo "Jobs scraped and saved successfully at $(date)"
