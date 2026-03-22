@@ -34,3 +34,12 @@ jobs:
           name: scraped-jobs
           path: jobs.json
           retention-days: 30
+
+      - name: Commit and push to GitHub
+        run: |
+          git config --global user.email "action@github.com"
+          git config --global user.name "GitHub Action"
+          git add jobs.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update jobs.json with $(date)" && git push)
+        continue-on-error: true  
+        
