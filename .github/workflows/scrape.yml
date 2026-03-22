@@ -10,6 +10,8 @@ jobs:
     name: Scrape JobTrain Jobs
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
     
     steps:
       - name: Checkout code
@@ -28,18 +30,20 @@ jobs:
       - name: Run scraper
         run: python scraper.py
       
-      - name: Upload jobs artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: scraped-jobs
           path: jobs.json
           retention-days: 30
-
+      
       - name: Commit and push to GitHub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config --global user.email "action@github.com"
           git config --global user.name "GitHub Action"
           git add jobs.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update jobs.json with $(date)" && git push)
-        continue-on-error: true  
-        
+          git commit -m "Update jobs.json - $(date)" || true
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/HammerThunderr/jobtrain-scraper.git main || true
+        continue-on-error: true
